@@ -217,6 +217,16 @@ function buildTrayMenu() {
         })
       }
     },
+    {
+      label: '变更原因必填',
+      type: 'checkbox',
+      checked: Boolean(settings.requireReason),
+      click: (item) => {
+        store.updateSettings({ requireReason: item.checked }).then(() => {
+          if (tray) tray.setContextMenu(buildTrayMenu())
+        })
+      }
+    },
     { label: '打开数据目录', click: () => shell.openPath(path.join(ROOT, 'data')) },
     { type: 'separator' },
     {

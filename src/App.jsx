@@ -118,6 +118,7 @@ export default function App() {
           if (!alive) return
           setDesktopAlive(Boolean(h.desktop))
           setNoteCount(h.notes || 0)
+          setRequireReason(Boolean(h.requireReason))
         })
         .catch(() => {})
     }
@@ -127,13 +128,6 @@ export default function App() {
       alive = false
       clearInterval(timer)
     }
-  }, [])
-
-  useEffect(() => {
-    api
-      .getSettings()
-      .then((s) => setRequireReason(Boolean(s && s.requireReason)))
-      .catch(() => {})
   }, [])
 
   useEffect(() => {

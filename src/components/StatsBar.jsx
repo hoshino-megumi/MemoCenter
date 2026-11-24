@@ -5,7 +5,7 @@ export default function StatsBar({ stats }) {
       key: 'open',
       label: '未完成',
       value: stats.open,
-      sub: stats.doing ? `进行中 ${stats.doing}` : `今日到期 ${stats.todayDue}`
+      sub: `今日到期 ${stats.todayDue}`
     },
     { key: 'done', label: '已完成', value: stats.done },
     { key: 'archived', label: '归档', value: stats.archived },

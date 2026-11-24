@@ -136,6 +136,7 @@ export function createAppServer({ store, distDir, onReminderAck }) {
         notes: store.listNotes().length,
         history: await store.history.count(),
         desktop: desktopAlive(),
+        requireReason: Boolean(store.getSettings().requireReason),
         dataFile: store.file,
         types: TYPES,
         priorities: PRIORITIES,

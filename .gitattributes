@@ -1,0 +1,28 @@
+# 统一换行符策略
+# .bat 是 GBK + CRLF 的命令行脚本，禁止任何转换，保持字节原样
+*.bat -text
+*.cmd -text
+
+# shell 脚本统一 LF
+*.sh text eol=lf
+
+# 构建与配置文件按文本处理，仓库内统一 LF
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+
+# 图片等二进制，禁止 diff 与转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.ico  binary
+
+# 无扩展名的仓库配置文件，单独声明以消除换行告警
+/.gitignore    text eol=lf
+/.gitattributes text eol=lf

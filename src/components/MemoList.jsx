@@ -1,5 +1,5 @@
 import Icon from './Icon'
-import { formatDue, formatDate, isOverdue, STATUS_LABEL } from '../lib/format'
+import { DOING_LABEL, formatDue, formatDate, isOverdue, STATUS_LABEL } from '../lib/format'
 
 function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, onPurge, onArchive }) {
   const overdue = isOverdue(memo)
@@ -45,7 +45,7 @@ function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, 
         <div className="memo-meta">
           <span className={`prio p-${(memo.priority || 'P2').toLowerCase()}`}>{memo.priority}</span>
           <span className="meta-type">{memo.type}</span>
-          {memo.isDoing && <span className="meta-state">{STATUS_LABEL.doing}</span>}
+          {memo.isDoing && <span className="meta-state">{DOING_LABEL}</span>}
           {archived && (
             <span className="meta-state is-archived" title={memo.archivedAt ? `归档于 ${formatDate(memo.archivedAt)}` : '已归档'}>
               {STATUS_LABEL.archived}

@@ -29,10 +29,10 @@ function when(iso) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}`
 }
 
-export default function HistoryTimeline({ memoId, refreshKey }) {
+export default function HistoryTimeline({ memoId, refreshKey, initExpanded = false }) {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(initExpanded)
 
   useEffect(() => {
     let alive = true

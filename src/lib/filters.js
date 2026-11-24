@@ -40,8 +40,8 @@ export function matchView(memo, view) {
 }
 
 export function countView(memos, view) {
-  if (view === 'all') {
-    return memos.filter((m) => !m.deletedAt && m.status === 'open').length
+  if (ACTIVE_VIEWS.includes(view)) {
+    return memos.filter((m) => !m.deletedAt && m.status === 'open' && matchView(m, view)).length
   }
   return memos.filter((m) => !m.deletedAt && matchView(m, view)).length
 }

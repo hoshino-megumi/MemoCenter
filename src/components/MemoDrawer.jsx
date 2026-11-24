@@ -46,7 +46,7 @@ export default function MemoDrawer({
   const [savedAt, setSavedAt] = useState(null)
   const [pending, setPending] = useState(null)
   const [historyVersion, setHistoryVersion] = useState(0)
-  const [historyOpen, setHistoryOpen] = useState(false)
+  const [panel, setPanel] = useState('edit')
   const formRef = useRef(form)
   const timer = useRef(null)
   const mounted = useRef(true)
@@ -278,18 +278,47 @@ export default function MemoDrawer({
   return (
     <aside className="drawer">
       <header className="drawer-head">
-        <div>
-          <p className="drawer-kicker">编辑事项</p>
+        <div className="drawer-head-text">
+          <p className="drawer-kicker">{panel === 'history' ? '变更记录' : '编辑事项'}</p>
           <p className="drawer-hint">
-            {saving ? '保存中…' : savedAt ? `已保存 ${timeText(savedAt)}` : '修改后自动保存'}
+            {panel === 'history'
+              ? memo.title
+              : saving
+                ? '保存中…'
+                : savedAt
+                  ? `已保存 ${timeText(savedAt)}`
+                  : '修改后自动保存'}
           </p>
         </div>
-        <button type="button" className="icon-btn" onClick={closeDrawer} aria-label="关闭">
-          <Icon name="close" size={16} />
-        </button>
+        <div className="drawer-head-tools">
+          <button
+            type="button"
+            className={`icon-btn ${panel === 'history' ? 'is-on' : ''}`}
+            onClick={() => setPanel((p) => (p === 'edit' ? 'history' : 'edit'))}
+            aria-label="变更记录"
+            title="变更记录"
+          >
+            <Icon name="history" size={16} />
+          </button>
+          <button type="button" className="icon-btn" onClick={closeDrawer} aria-label="关闭">
+            <Icon name="close" size={16} />
+          </button>
+        </div>
       </header>
 
-      <div className="drawer-pin">
+      {panel === 'history' ? (
+        <div className="drawer-body">
+          <div className="drawer-history-bar">
+            <span className="drawer-hint">按时间倒序，只追加不改写</span>
+            <button type="button" className="text-btn" onClick={() => setPanel('edit')}>
+              返回编辑
+            </button>
+          </div>
+          <HistoryTimeline memoId={memo.id} refreshKey={historyVersion} initExpanded />
+        </div>
+      ) : (
+        <>
+          <div className="drawer-pin">
         <textarea
           ref={titleRef}
           className="drawer-title"
@@ -519,21 +548,14 @@ export default function MemoDrawer({
           )}
         </div>
 
-        <div className="field">
-          <button type="button" className="section-toggle" onClick={() => setHistoryOpen((v) => !v)}>
-            <Icon name="history" size={13} />
-            变更记录
-            <span className="section-toggle-hint">{historyOpen ? '收起' : '展开'}</span>
-          </button>
-          {historyOpen && <HistoryTimeline memoId={memo.id} refreshKey={historyVersion} />}
-        </div>
-
         <div className="drawer-meta">
           <span>创建 {formatDate(memo.createdAt)}</span>
           <span>更新 {formatDate(memo.updatedAt)}</span>
           {memo.archivedAt && <span>归档 {formatDate(memo.archivedAt)}</span>}
         </div>
       </div>
+        </>
+      )}
 
       <footer className="drawer-foot">
         <button
@@ -545,8 +567,12 @@ export default function MemoDrawer({
         >
           删除
         </button>
-        <button type="button" className="primary-btn" onClick={closeDrawer}>
-          完成编辑
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => (panel === 'history' ? setPanel('edit') : closeDrawer())}
+        >
+          {panel === 'history' ? '返回编辑' : '完成编辑'}
         </button>
       </footer>
     </aside>

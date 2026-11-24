@@ -9,6 +9,8 @@ export const TYPES = ['需求', '缺陷', '会议', '跟进', '日常']
 
 export const STATUS_LABEL = { open: '未完成', done: '已完成', archived: '归档' }
 
+export const DOING_LABEL = '进行中'
+
 export const STATUS_ORDER = ['open', 'done', 'archived']
 
 export const FIELD_LABEL = {
