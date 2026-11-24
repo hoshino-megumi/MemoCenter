@@ -1,0 +1,280 @@
+html,
+body,
+.fx-body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.fx-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border: 1px solid var(--line);
+  box-sizing: border-box;
+  background: var(--surface);
+}
+
+.fx-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+
+.fx-date {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.fx-week {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.fx-head-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.fx-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.fx-tool:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+
+.fx-tool.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fx-tabs {
+  display: flex;
+  gap: 14px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.fx-tab {
+  padding: 0 0 7px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.fx-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.fx-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+}
+
+.fx-item {
+  display: flex;
+  gap: 8px;
+  padding: 7px 0;
+  align-items: flex-start;
+}
+
+.fx-check {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.fx-check:hover {
+  border-color: var(--ok);
+}
+
+.fx-item-main {
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.fx-title {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.fx-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.fx-overdue {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.fx-empty {
+  padding: 34px 10px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+.fx-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.fx-link {
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 10.5px;
+}
+
+.fx-notes-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fx-note {
+  position: relative;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.fx-note textarea {
+  width: 100%;
+  min-height: 54px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.fx-note-amber {
+  background: var(--note-amber);
+}
+
+.fx-note-blue {
+  background: var(--note-blue);
+}
+
+.fx-note-green {
+  background: var(--note-green);
+}
+
+.fx-note-pink {
+  background: var(--note-pink);
+}
+
+.fx-note-gray {
+  background: var(--note-gray);
+}
+
+.fx-note-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.fx-note:hover .fx-note-bar {
+  opacity: 1;
+}
+
+.fx-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
+.fx-dot.amber {
+  background: #f5c451;
+}
+
+.fx-dot.blue {
+  background: #9ec5f0;
+}
+
+.fx-dot.green {
+  background: #a8d5a2;
+}
+
+.fx-dot.pink {
+  background: #f2a9c4;
+}
+
+.fx-dot.gray {
+  background: #d6d4cb;
+}
+
+.fx-note-del {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.fx-add-note {
+  width: 100%;
+  padding: 8px 0;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.fx-add-note:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}

@@ -1,0 +1,25 @@
+{
+  "name": "memo-center",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "description": "工作备忘记录系统 - 本地全栈，数据落盘，桌面提醒",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server/index.mjs",
+    "serve": "vite build && node server/index.mjs",
+    "desktop": "node desktop/launch.mjs",
+    "desktop:build": "vite build && node desktop/launch.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^45.4.1",
+    "vite": "^5.4.11"
+  }
+}
