@@ -62,6 +62,7 @@ export default function App() {
   const [rules, setRules] = useState([])
   const [ruleDialog, setRuleDialog] = useState(null)
   const [healthInfo, setHealthInfo] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('memo-theme')
     if (saved === 'light' || saved === 'dark') return saved
@@ -214,6 +215,17 @@ export default function App() {
     }, 60000)
     return () => clearInterval(timer)
   }, [reload, notify])
+
+  // 主窗口静默轮询：焦点窗等外部入口对服务端的改动不会通知主窗口，这里每 30 秒补拉一次。
+  // 抽屉打开时跳过：reload 会改变 memo.status，从而触发 MemoDrawer 的表单重置 effect，
+  // 清掉用户正在输入但尚未保存的内容。失败不提示、成功不弹 toast，全程不打扰用户。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (drawerOpenRef.current) return
+      reload().catch(() => {})
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [reload])
 
   const filtered = useMemo(    () => sortMemos(filterMemos(memos, { view, tag, q, types, priorities, showDone }), sort),
     [memos, view, tag, q, types, priorities, showDone, sort]
@@ -450,6 +462,20 @@ export default function App() {
     [reload, notify]
   )
 
+  // 手动刷新是用户"等不及"时的出口：抽屉打开时同样立即刷新，但给出轻提示说明
+  // 抽屉里尚未落盘的草稿可能因为服务端状态变化而被重置，避免用户困惑。
+  const handleManualRefresh = useCallback(() => {
+    if (refreshing) return
+    setRefreshing(true)
+    const drawerOpen = drawerOpenRef.current
+    reload()
+      .then(() => {
+        notify(drawerOpen ? '已刷新数据（抽屉中未保存的修改可能已重置）' : '已刷新数据')
+      })
+      .catch(() => notify('刷新失败，请稍后重试', 'danger'))
+      .finally(() => setRefreshing(false))
+  }, [reload, notify, refreshing])
+
   const handleExport = useCallback(() => {
     const link = document.createElement('a')
     link.href = '/api/export'
@@ -562,6 +588,16 @@ export default function App() {
               <option value="created">按创建时间</option>
               <option value="updated">按更新时间</option>
             </select>
+            <button
+              type="button"
+              className={`refresh-btn ${refreshing ? 'is-spinning' : ''}`}
+              onClick={handleManualRefresh}
+              title="刷新数据"
+              aria-label="刷新数据"
+              aria-busy={refreshing}
+            >
+              <Icon name="refresh" size={15} />
+            </button>
           </div>
         </header>
 
