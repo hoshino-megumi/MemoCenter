@@ -8,7 +8,12 @@ export default function StatsBar({ stats }) {
       sub: `今日到期 ${stats.todayDue}`
     },
     { key: 'done', label: '已完成', value: stats.done },
-    { key: 'archived', label: '归档', value: stats.archived },
+    {
+      key: 'archived',
+      label: '归档',
+      value: stats.archived,
+      sub: stats.skipped > 0 ? `含跳过 ${stats.skipped}` : undefined
+    },
     { key: 'overdue', label: '已逾期', value: stats.overdue, tone: stats.overdue > 0 ? 'danger' : '' },
     { key: 'rate', label: '完成率', value: `${stats.rate}%`, sub: `${stats.done}/${settled}` }
   ]

@@ -18,6 +18,22 @@ const ACTION_LABEL = {
 const ACTOR_LABEL = { web: '网页', desktop: '桌面端', system: '系统' }
 const COLLAPSED = 5
 
+/**
+ * 变更圆点的语义配色：
+ *   完成=绿、创建=蓝、修改=黄；删除类=红、归档类=橙、附件类=青。
+ * 「完成」不是独立 action，而是 update 里 status 变成 done，需要按 change 内容识别。
+ */
+function dotKind(entry) {
+  if (entry.action === 'create' || entry.action === 'import') return 'create'
+  if (entry.action === 'delete' || entry.action === 'purge') return 'delete'
+  if (entry.action === 'archive' || entry.action === 'unarchive') return 'archive'
+  if (entry.action === 'attach' || entry.action === 'detach') return 'attach'
+  const changes = entry.changes || []
+  if (changes.some((c) => c.field === 'status' && c.to === 'done')) return 'done'
+  if (changes.some((c) => c.field === 'skippedAt' && c.to)) return 'archive'
+  return 'update'
+}
+
 function when(iso) {
   const d = new Date(iso)
   const now = new Date()
@@ -62,7 +78,7 @@ export default function HistoryTimeline({ memoId, refreshKey, initExpanded = fal
       <ol className="history-list">
         {visible.map((entry) => (
           <li className="history-item" key={entry.id}>
-            <span className={`history-dot action-${entry.action}`} />
+            <span className={`history-dot kind-${dotKind(entry)}`} />
             <div className="history-main">
               <p className="history-head">
                 <span className="history-action">{ACTION_LABEL[entry.action] || entry.action}</span>

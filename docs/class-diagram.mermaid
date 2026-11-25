@@ -1,0 +1,148 @@
+classDiagram
+  direction LR
+
+  class Memo {
+    +string id
+    +string title
+    +string type
+    +string priority
+    +string status
+    +boolean isDoing
+    +string[] tags
+    +string|null dueAt
+    +string|null reminderAt
+    +string|null reminderFiredAt
+    +string|null snoozeUntil
+    +string note
+    +Attachment[] attachments
+    +boolean pinned
+    +string createdAt
+    +string updatedAt
+    +string|null completedAt
+    +string|null archivedAt
+    +string|null deletedAt
+    +string|null repeatId
+    +string|null repeatDate
+  }
+
+  class RepeatRule {
+    +string id
+    +string title
+    +string type
+    +string priority
+    +string[] tags
+    +string note
+    +string freq
+    +number|null weekday
+    +string|null dueTime
+    +number|null reminderLead
+    +boolean enabled
+    +string startDate
+    +string createdAt
+    +string updatedAt
+    +string|null deletedAt
+  }
+
+  class Store {
+    +Memo[] memos
+    +RepeatRule[] repeats
+    +string repeatsFile
+    +Promise queue
+    +string|null _repeatStamp
+    +Promise|null _ensurePromise
+    +init()
+    +list() Memo[]
+    +get(id) Memo
+    +create(payload, meta) Memo
+    +createMany(payloads, meta) Memo[]
+    +update(id, patch, meta) Memo
+    +remove(id, hard, meta)
+    +skipRepeat(id, meta) Memo
+    +listRepeats(opts) RepeatRule[]
+    +getRepeat(id) RepeatRule
+    +createRepeat(payload) RepeatRule
+    +updateRepeat(id, patch) RepeatRule
+    +removeRepeat(id, hard)
+    +applyRepeatToToday(id, patch, meta)
+    +ensureToday(now) Memo[]
+    +_ensure(now) Memo[]
+    +invalidateRepeatStamp()
+    +persist()
+    +persistRepeats()
+  }
+
+  class RepeatEngine {
+    <<module server/repeat.mjs>>
+    +FREQS
+    +WEEKDAYS
+    +localDateKey(d) string
+    +isoWeekday(d) number
+    +hitsOn(rule, d) boolean
+    +instanceFields(rule, dateKey) object
+    +buildInstance(rule, dateKey) Memo
+    +repeatKey(repeatId, dateKey) string
+    +sanitizeRepeat(input, base) RepeatRule
+    +repeatLabel(rule, dateKey) string
+  }
+
+  class HistoryLog {
+    +TRACKED_FIELDS
+    +append(entry)
+    +diffMemos(prev, next)
+    +forMemo(memoId, limit)
+    +recent(limit)
+  }
+
+  class AppServer {
+    +handleApi(req, res, url)
+    +buildFocus(store) object
+  }
+
+  class Scheduler {
+    +tick()
+    +start()
+    +stop()
+  }
+
+  class WebClient {
+    +list()
+    +listRepeats()
+    +createRepeat(payload)
+    +updateRepeat(id, patch)
+    +applyRepeat(id, patch)
+    +skipRepeat(id, reason)
+    +removeRepeat(id)
+  }
+
+  class App {
+    +Memo[] memos
+    +RepeatRule[] repeats
+    +handleSkip(memo)
+    +handleApplySeries(id, patch)
+    +handleCrossDay()
+  }
+
+  class RepeatDialog {
+    +string mode
+    +RepeatRule rule
+    +onSubmit(payload)
+  }
+
+  class RepeatBadge {
+    +RepeatRule|null repeat
+    +string dateKey
+  }
+
+  RepeatRule "1" --> "0..*" Memo : 按需实例化 repeatId+repeatDate
+  Store *-- Memo
+  Store *-- RepeatRule
+  Store ..> RepeatEngine : 调用命中判定/字段派生
+  Store --> HistoryLog : append
+  AppServer --> Store
+  AppServer ..> RepeatEngine
+  Scheduler --> Store : ensureToday + 提醒扫描
+  WebClient ..> AppServer : HTTP
+  App --> WebClient
+  App --> RepeatDialog
+  App --> RepeatBadge
+  Scheduler ..> Memo : onDue 弹窗

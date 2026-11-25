@@ -40,6 +40,11 @@ export function matchView(memo, view) {
 }
 
 export function countView(memos, view) {
+  // 回收站里的条目恰恰带 deletedAt，不能套用其余视图的 `!m.deletedAt` 过滤，
+  // 否则列表能看到条目、侧边栏却永远显示 0。与 filterMemos 的 trash 分支保持同一语义。
+  if (view === 'trash') {
+    return memos.filter((m) => Boolean(m.deletedAt)).length
+  }
   if (ACTIVE_VIEWS.includes(view)) {
     return memos.filter((m) => !m.deletedAt && m.status === 'open' && matchView(m, view)).length
   }
@@ -134,6 +139,8 @@ export function computeStats(memos) {
     overdue: active.filter((m) => isOverdue(m)).length,
     done: done.length,
     archived: archived.length,
+    // 跳过不计入完成率分母（rate 仍是 open + done），单独统计便于归档卡片展示
+    skipped: active.filter((m) => m.skippedAt).length,
     total: active.length,
     rate: settled ? Math.round((done.length / settled) * 100) : 0
   }

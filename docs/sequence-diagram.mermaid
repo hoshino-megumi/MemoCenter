@@ -1,0 +1,131 @@
+sequenceDiagram
+  autonumber
+  participant U as 用户
+  participant R as React App
+  participant API as api.js
+  participant S as AppServer (app.mjs)
+  participant ST as Store
+  participant E as RepeatEngine
+  participant H as HistoryLog
+  participant SC as Scheduler
+  participant D as Desktop (main.mjs)
+
+  Note over SC,ST: ── 场景 A：scheduler tick 触发生成（每 20s，主路径）──
+  SC->>ST: ensureToday(now)
+  alt _repeatStamp === 今日本地日期
+    ST-->>SC: [] 立即返回（O(1) 快路径）
+  else 需要真正生成
+    ST->>E: localDateKey(now)
+    E-->>ST: "2026-11-25"
+    ST->>ST: rules = repeats.filter(enabled && !deletedAt)
+    ST->>ST: taken = Set(所有实例 repeatId@repeatDate，含已删除/已归档)
+    loop 每条规则
+      ST->>E: hitsOn(rule, now)
+      E-->>ST: true / false（daily 恒真；weekly 比 isoWeekday）
+      ST->>E: buildInstance(rule, todayKey)
+      E->>E: instanceFields：本地时间构造 dueAt / reminderAt
+      E-->>ST: Memo{ repeatId, repeatDate, dueAt, reminderAt }
+    end
+    ST->>ST: createMany(batch) → memos.unshift(...) → persist() 只写一次盘
+    Note over ST,H: 不写 history（避免实例生成淹没 history.jsonl）
+    ST->>ST: _repeatStamp = 今日
+    ST-->>SC: Memo[]
+  end
+  SC->>ST: list() 扫描 status=open 且 reminderAt 到点
+  SC->>D: onDue(memo) 弹系统提醒
+  SC->>ST: update(id, {reminderFiredAt}) 标记已提醒
+
+  Note over U,ST: ── 场景 B：打开页面 / 焦点窗（读路径也生成）──
+  U->>R: 打开应用
+  R->>API: list()
+  API->>S: GET /api/memos
+  S->>ST: ensureToday()（幂等，通常走快路径）
+  ST-->>S: Memo[]
+  S-->>API: { memos }
+  API-->>R: Memo[]
+  R->>API: listRepeats()
+  API->>S: GET /api/repeats
+  S->>ST: listRepeats()
+  ST-->>S: RepeatRule[]
+  S-->>API: { repeats }
+  API-->>R: RepeatRule[]
+  R->>R: rulesById = Map(repeats)
+  R->>R: 渲染列表：repeatId 有值 → RepeatBadge「每日 / 每周三」
+
+  Note over U,API: ── 场景 C：新建重复规则 ──
+  U->>R: 点「+ 重复」→ 填标题 / 每日或每周（单选星期几）/ 18:00 / 提前 30 分钟
+  R->>R: RepeatDialog 校验（weekly 必带 weekday 1..7）
+  R->>API: createRepeat(payload)
+  API->>S: POST /api/repeats
+  S->>ST: createRepeat(payload) + invalidateRepeatStamp()
+  ST->>ST: persistRepeats()
+  S->>ST: ensureToday() 立刻为今天生成
+  ST->>ST: createMany → persist()
+  ST-->>S: memo（今天命中时非 null）
+  S-->>API: 201 { repeat, memo }
+  API-->>R: { repeat, memo }
+  R->>U: 列表出现今天这条 + 循环图标
+
+  Note over U,API: ── 场景 D：仅本次修改（默认，零新接口）──
+  U->>R: 打开抽屉，改标题 / 截止时间
+  R->>API: update(memoId, patch)
+  API->>S: PATCH /api/memos/:id
+  S->>ST: update(id, patch, {actor:'web'})  ← repeatId/repeatDate 被 strip
+  ST->>H: append(action:'update', changes)
+  ST-->>S: Memo
+  S-->>API: Memo
+  Note over R: 只影响今天这条，规则与明天不受影响
+
+  Note over U,API: ── 场景 E：改整个系列 ──
+  U->>R: 点「改整个系列…」
+  R->>U: ConfirmDialog「会覆盖今天这条，已完成/已跳过的不受影响」
+  U->>R: 确认
+  R->>API: applyRepeat(ruleId, patch)
+  API->>S: POST /api/repeats/:id/apply
+  S->>ST: applyRepeatToToday(id, patch)
+  ST->>ST: updateRepeat(id) + invalidateRepeatStamp() + persistRepeats()
+  ST->>E: instanceFields(rule, today)
+  E-->>ST: 重算后的 title/type/priority/tags/note/dueAt/reminderAt
+  ST->>ST: 找到今天实例（status=open 且未删除）→ update()
+  ST->>H: append(action:'repeat-apply', reason)
+  ST-->>S: { repeat, memo }
+  S-->>API: { repeat, memo }
+  API-->>R: { repeat, memo }
+  R->>R: reload() 刷新列表
+
+  Note over U,API: ── 场景 F：跳过本次 ──
+  U->>R: 列表行 hover →「跳过本次」/ 抽屉内按钮
+  R->>U: 轻确认「跳过今天这次？明天照常出现，不计入完成率」
+  U->>R: 确认
+  R->>API: skipRepeat(memoId)
+  API->>S: POST /api/memos/:id/skip
+  S->>ST: skipRepeat(id, {reason})
+  alt memo.repeatId 为空
+    ST-->>S: 抛错 400「该事项不是重复事项」
+    S-->>API: 400
+  else 是重复实例
+    ST->>ST: update(id, {status:'archived'}, {action:'skip'})
+    ST->>H: append(action:'skip', reason)
+    ST-->>S: Memo (archived)
+    S-->>API: Memo
+  end
+  R->>R: 该行从「未完成」组移到「归档」组
+  Note over ST: 幂等索引仍含这条（repeatDate 占位），今天不再重生
+
+  Note over R,ST: ── 场景 G：跨天（页面开着）──
+  R->>R: setInterval 60s 比对 localDateKey
+  R->>R: 日期变了 → reload() + notify「已进入新的一天」
+  R->>API: list()
+  API->>S: GET /api/memos
+  S->>ST: ensureToday()（_repeatStamp 已过期 → 重新生成）
+  S-->>API: { memos: 昨天未完成 + 今天新生成 }
+  Note over U: 昨天没做的仍留着（错过不补，不自动清理）
+
+  Note over D,ST: ── 场景 H：进程安全（R1）──
+  D->>D: startServer() 监听端口
+  alt 端口可用 → ownsServer = true
+    D->>ST: ensureToday() + scheduler.start()
+  else EADDRINUSE → 复用已有服务
+    D->>D: 不 ensure、不 start scheduler（只 ping 存活）
+    Note over D: 否则两个 Store 各自全量覆写 memos.json → 丢数据
+  end

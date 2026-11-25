@@ -67,6 +67,40 @@ export function useMemos(onError) {
     [replaceOne]
   )
 
+  /**
+   * 归档 / 取消归档一条事项。
+   *
+   * 先做乐观更新让列表立即响应，再用服务端返回的真实数据覆盖；失败时回滚并提示。
+   * 服务端语义：归档 -> status=archived + archivedAt；取消归档 -> status=open，
+   * archivedAt 与 completedAt 均被清空，因此本地乐观 patch 需保持一致。
+   *
+   * @param {string} id 事项 id
+   * @param {boolean} [archived=true] true 归档，false 取消归档
+   * @param {string} [reason] 可选的归档原因，写入变更历史
+   * @returns {Promise<object>} 服务端返回的最新 memo
+   */
+  const archive = useCallback(
+    async (id, archived = true, reason) => {
+      const before = ref.current.find((m) => m.id === id)
+      if (before) {
+        const patch = archived
+          ? { status: 'archived', archivedAt: new Date().toISOString() }
+          : { status: 'open', archivedAt: null, completedAt: null }
+        setMemos((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+      }
+      try {
+        const memo = await api.archive(id, archived, reason)
+        replaceOne(memo)
+        return memo
+      } catch (err) {
+        if (before) replaceOne(before)
+        report.current?.(err.message)
+        throw err
+      }
+    },
+    [replaceOne]
+  )
+
   const remove = useCallback(async (id) => {
     setMemos((prev) => prev.map((m) => (m.id === id ? { ...m, deletedAt: new Date().toISOString() } : m)))
     try {
@@ -127,5 +161,5 @@ export function useMemos(onError) {
     [reload]
   )
 
-  return { memos, ready, create, update, remove, restore, purge, emptyTrash, importJson, reload }
+  return { memos, ready, create, update, archive, remove, restore, purge, emptyTrash, importJson, reload }
 }

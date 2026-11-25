@@ -278,3 +278,8 @@ body,
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* 重复事项标记：直接读服务端下发的 repeatLabel，不在前端二次计算配额 */
+.fx-repeat {
+  color: var(--text-3);
+}

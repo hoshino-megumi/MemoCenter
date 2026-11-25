@@ -2,6 +2,14 @@ import { mkdir, readFile, writeFile, rename, copyFile, readdir, unlink } from 'n
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { HistoryLog, diffMemos } from './history.mjs'
+import {
+  buildRule,
+  localDateKey,
+  matchRule,
+  instanceFrom,
+  instanceFields,
+  repeatKey
+} from './repeat.mjs'
 
 export const TYPES = ['需求', '缺陷', '会议', '跟进', '日常']
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3']
@@ -32,6 +40,7 @@ export const DEFAULT_SETTINGS = {
 }
 
 const nowIso = () => new Date().toISOString()
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/
 
 function str(value, max) {
   if (typeof value !== 'string') return ''
@@ -115,7 +124,15 @@ export function sanitize(input, base) {
     updatedAt: isoOrNull(src.updatedAt) || nowIso(),
     completedAt: status === 'done' ? completedRaw || nowIso() : status === 'archived' ? completedRaw : null,
     archivedAt: status === 'archived' ? archivedRaw || nowIso() : null,
-    deletedAt: src.deletedAt === null ? null : fallback.deletedAt || isoOrNull(src.deletedAt) || null
+    deletedAt: src.deletedAt === null ? null : fallback.deletedAt || isoOrNull(src.deletedAt) || null,
+    // 重复事项元数据。旧数据 undefined → null，纯追加、无损兼容 version 3。
+    repeatId: str(src.repeatId ?? fallback.repeatId, 64) || null,
+    repeatDate: DATE_KEY.test(String(src.repeatDate ?? fallback.repeatDate ?? ''))
+      ? String(src.repeatDate ?? fallback.repeatDate)
+      : null,
+    skippedAt: src.skippedAt === null
+      ? null
+      : fallback.skippedAt || isoOrNull(src.skippedAt) || null
   }
 }
 
@@ -187,12 +204,20 @@ export class Store {
     this.file = path.join(dir, 'memos.json')
     this.notesFile = path.join(dir, 'notes.json')
     this.settingsFile = path.join(dir, 'settings.json')
+    this.repeatsFile = path.join(dir, 'repeats.json')
     this.backupDir = path.join(dir, 'backups')
     this.memos = []
     this.notes = []
+    this.repeats = []
     this.settings = { ...DEFAULT_SETTINGS }
     this.queue = Promise.resolve()
     this.history = new HistoryLog(dir)
+    /** 今天已生成过实例的本地日期键；scheduler 每 20s 调 ensure，快路径命中率极高 */
+    this._repeatStamp = null
+    /** 同进程重入锁：并发 ensure 共用同一个 promise */
+    this._ensurePromise = null
+    /** stamp 失效计数：ensure 进行中若规则/数据变化，避免旧 ensure 结束把新 stamp 覆盖回去 */
+    this._repeatEpoch = 0
     this.ready = this.init()
   }
 
@@ -211,9 +236,23 @@ export class Store {
     const settingsDoc = await readJson(this.settingsFile, { settings: DEFAULT_SETTINGS })
     this.settings = sanitizeSettings(settingsDoc.settings || settingsDoc || {}, DEFAULT_SETTINGS)
 
+    const repeatDoc = await readJson(this.repeatsFile, { repeats: [] })
+    const repeatList = Array.isArray(repeatDoc) ? repeatDoc : repeatDoc.repeats
+    this.repeats = []
+    if (Array.isArray(repeatList)) {
+      for (const raw of repeatList) {
+        try {
+          this.repeats.push(buildRule(raw, raw))
+        } catch (err) {
+          console.warn('[store] 跳过损坏的重复规则:', err.message)
+        }
+      }
+    }
+
     await this.persist()
     await this.persistNotes()
     await this.persistSettings()
+    await this.persistRepeats()
   }
 
   persist() {
@@ -242,6 +281,20 @@ export class Store {
         await atomicWrite(this.settingsFile, { version: 1, settings: this.settings })
       })
       .catch((err) => console.error('[store] 设置写入失败:', err.message))
+    return this.queue
+  }
+
+  persistRepeats() {
+    this.queue = this.queue
+      .then(async () => {
+        await atomicWrite(this.repeatsFile, {
+          version: 1,
+          updatedAt: nowIso(),
+          repeats: this.repeats
+        })
+        await this.dailyBackup('repeats', this.repeatsFile)
+      })
+      .catch((err) => console.error('[store] 重复规则写入失败:', err.message))
     return this.queue
   }
 
@@ -278,7 +331,11 @@ export class Store {
   }
 
   async create(payload, meta = {}) {
-    const memo = sanitize(payload, {})
+    // 幂等元数据只允许系统路径写入，客户端伪造会破坏 ensureToday 的唯一性约束。
+    const safe = meta.system
+      ? payload
+      : { ...payload, repeatId: null, repeatDate: null, skippedAt: null }
+    const memo = sanitize(safe, {})
     if (!memo.title) throw Object.assign(new Error('标题不能为空'), { status: 400 })
     this.memos.unshift(memo)
     await this.persist()
@@ -293,6 +350,11 @@ export class Store {
     const clean = { ...(patch || {}) }
     const reason = clean.reason ?? meta.reason ?? ''
     delete clean.reason
+    if (!meta.system) {
+      delete clean.repeatId
+      delete clean.repeatDate
+      delete clean.skippedAt
+    }
 
     const merged = { ...current, ...clean, updatedAt: nowIso() }
     if (Object.prototype.hasOwnProperty.call(clean, 'deletedAt') && clean.deletedAt === null) {
@@ -317,8 +379,8 @@ export class Store {
     const changes = diffMemos(current, next)
     if (changes.length) {
       const statusChange = changes.find((c) => c.field === 'status')
-      let action = 'update'
-      if (statusChange && changes.length === 1) {
+      let action = meta.action || 'update'
+      if (!meta.action && statusChange && changes.length === 1) {
         if (statusChange.to === 'archived') action = 'archive'
         else if (statusChange.from === 'archived') action = 'unarchive'
       }
@@ -331,7 +393,9 @@ export class Store {
     const index = this.memos.findIndex((m) => m.id === id)
     if (index === -1) throw Object.assign(new Error('事项不存在'), { status: 404 })
     if (hard) {
-      this.memos.splice(index, 1)
+      const [removed] = this.memos.splice(index, 1)
+      // 物理删除后允许当天实例按「错过不补」的自然语义重新生成（软删不会）。
+      if (removed && removed.repeatId) this.invalidateRepeatStamp()
     } else {
       this.memos[index] = { ...this.memos[index], deletedAt: nowIso(), updatedAt: nowIso() }
     }
@@ -347,12 +411,18 @@ export class Store {
   }
 
   async archive(id, archived, meta = {}) {
-    return this.update(id, { status: archived ? 'archived' : 'open' }, meta)
+    // 撤销归档 = 撤销跳过：同步清 skippedAt。此处是服务端内部路径，故放开 meta.system。
+    return this.update(
+      id,
+      archived ? { status: 'archived' } : { status: 'open', skippedAt: null },
+      { ...meta, system: true }
+    )
   }
 
   async emptyTrash(meta = {}) {
     const removed = this.memos.filter((m) => m.deletedAt)
     this.memos = this.memos.filter((m) => !m.deletedAt)
+    if (removed.some((m) => m.repeatId)) this.invalidateRepeatStamp()
     await this.persist()
     for (const memo of removed) this.log(memo.id, 'purge', meta.actor || 'web', meta.reason, [])
     return { ok: true, count: removed.length }
@@ -409,9 +479,210 @@ export class Store {
       for (const memo of valid) byId.set(memo.id, memo)
       this.memos = Array.from(byId.values())
     }
+    // 导入可能整体替换掉已有实例，必须让当天重新按幂等键判定。
+    this.invalidateRepeatStamp()
     await this.persist()
     this.log('__import__', 'import', 'web', '', [{ field: 'count', from: '', to: String(valid.length) }])
     return { ok: true, count: valid.length, total: this.memos.length }
+  }
+
+  // -------------------------------------------------------------------------
+  // 重复规则与每日实例
+  // -------------------------------------------------------------------------
+
+  /** 规则/实例集合变化后让当天的快路径失效。 */
+  invalidateRepeatStamp() {
+    this._repeatStamp = null
+    this._repeatEpoch += 1
+  }
+
+  listRepeats({ includeDeleted = false } = {}) {
+    const list = includeDeleted ? this.repeats : this.repeats.filter((r) => !r.deletedAt)
+    return list.map((r) => ({ ...r, tags: [...r.tags] }))
+  }
+
+  getRepeat(id) {
+    return this.repeats.find((r) => r.id === id) || null
+  }
+
+  async createRepeat(payload, meta = {}) {
+    const clean = { ...(payload || {}) }
+    delete clean.id
+    delete clean.createdAt
+    delete clean.deletedAt
+    const rule = buildRule(clean, {})
+    this.repeats.unshift(rule)
+    await this.persistRepeats()
+    this.invalidateRepeatStamp()
+    this.log(rule.id, 'repeat-create', meta.actor || 'web', meta.reason, [])
+    return rule
+  }
+
+  async updateRepeat(id, patch, meta = {}) {
+    const index = this.repeats.findIndex((r) => r.id === id)
+    if (index === -1) throw Object.assign(new Error('重复规则不存在'), { status: 404 })
+    const clean = { ...(patch || {}) }
+    delete clean.id
+    delete clean.createdAt
+    const next = buildRule(clean, this.repeats[index])
+    this.repeats[index] = next
+    await this.persistRepeats()
+    this.invalidateRepeatStamp()
+    this.log(id, meta.action || 'repeat-update', meta.actor || 'web', meta.reason, [])
+    return next
+  }
+
+  async removeRepeat(id, hard = false, meta = {}) {
+    const index = this.repeats.findIndex((r) => r.id === id)
+    if (index === -1) throw Object.assign(new Error('重复规则不存在'), { status: 404 })
+    if (hard) {
+      this.repeats.splice(index, 1)
+    } else {
+      this.repeats[index] = { ...this.repeats[index], deletedAt: nowIso(), updatedAt: nowIso() }
+    }
+    await this.persistRepeats()
+    this.invalidateRepeatStamp()
+    this.log(id, hard ? 'repeat-purge' : 'repeat-remove', meta.actor || 'web', meta.reason, [])
+    // 规则删除/停用不级联删实例：用户可能已完成今天那条。
+    return { ok: true }
+  }
+
+  async importRepeats(list, mode = 'merge') {
+    const valid = []
+    for (const raw of Array.isArray(list) ? list : []) {
+      try {
+        valid.push(buildRule(raw, raw))
+      } catch {
+        /* 跳过损坏规则，不阻断整包导入 */
+      }
+    }
+    if (mode === 'replace') {
+      this.repeats = valid
+    } else {
+      const byId = new Map(this.repeats.map((r) => [r.id, r]))
+      for (const rule of valid) byId.set(rule.id, rule)
+      this.repeats = Array.from(byId.values())
+    }
+    await this.persistRepeats()
+    this.invalidateRepeatStamp()
+    this.log('__import__', 'repeat-import', 'web', '', [{ field: 'count', from: '', to: String(valid.length) }])
+    return { ok: true, count: valid.length, total: this.repeats.length }
+  }
+
+  /**
+   * 批量创建实例：一次 unshift + 一次 persist() + 一次快照，且不写 history。
+   * 每日实例若走 create()，一年约 2900 条 create 流水会把 history.jsonl 淹没。
+   */
+  async createMany(payloads) {
+    const made = []
+    for (const raw of Array.isArray(payloads) ? payloads : []) {
+      const memo = sanitize(raw, {})
+      if (!memo.title) continue
+      made.push(memo)
+    }
+    if (!made.length) return []
+    this.memos.unshift(...made)
+    await this.persist()
+    return made
+  }
+
+  /**
+   * 确保今天的实例已生成。全部触发点都在服务端，前端不暴露生成动作。
+   *
+   * 幂等键 `` `${repeatId}@${repeatDate}` `` 每次现建 Set 并覆盖 memos 全量
+   * （含 deletedAt / done / archived），软删与跳过因此不会重生；物理删除后当天
+   * 会重生一次，这是已接受的已知行为（不引入 tombstone）。
+   *
+   * @param {Date} [now] 可注入的当前时刻（用于跨天与时区测试）
+   * @returns {Promise<number>} 本次生成的实例条数
+   */
+  async ensureToday(now = new Date()) {
+    if (this._ensurePromise) return this._ensurePromise
+    const epoch = this._repeatEpoch
+    const pending = this._ensure(now, epoch)
+    this._ensurePromise = pending
+    pending.finally(() => {
+      if (this._ensurePromise === pending) this._ensurePromise = null
+    }).catch(() => {})
+    return pending
+  }
+
+  async _ensure(now, epoch) {
+    const dayKey = localDateKey(now)
+    if (this._repeatStamp === dayKey) return 0
+
+    const rules = this.repeats.filter(
+      (r) => r.enabled && !r.deletedAt && dayKey >= r.startDate
+    )
+    if (!rules.length) {
+      if (epoch === this._repeatEpoch) this._repeatStamp = dayKey
+      return 0
+    }
+
+    const taken = new Set()
+    for (const memo of this.memos) {
+      if (memo.repeatId && memo.repeatDate) taken.add(repeatKey(memo.repeatId, memo.repeatDate))
+    }
+
+    const batch = []
+    for (const rule of rules) {
+      if (!matchRule(rule, dayKey, now)) continue
+      const key = repeatKey(rule.id, dayKey)
+      if (taken.has(key)) continue
+      taken.add(key)
+      batch.push(instanceFrom(rule, dayKey, now))
+    }
+
+    if (!batch.length) {
+      if (epoch === this._repeatEpoch) this._repeatStamp = dayKey
+      return 0
+    }
+    const created = await this.createMany(batch)
+    if (epoch === this._repeatEpoch) this._repeatStamp = dayKey
+    return created.length
+  }
+
+  /** 跳过本次 = 归档 + skippedAt；历史动作固定为 skip（不受自动推断影响）。 */
+  async skip(id, meta = {}) {
+    const memo = this.get(id)
+    if (!memo) throw Object.assign(new Error('事项不存在'), { status: 404 })
+    if (!memo.repeatId) throw Object.assign(new Error('该事项不是重复事项'), { status: 400 })
+    return this.update(
+      id,
+      { status: 'archived', skippedAt: nowIso() },
+      { actor: meta.actor || 'web', reason: meta.reason, action: 'skip', system: true }
+    )
+  }
+
+  /**
+   * 改系列：先改规则，再同步覆盖今天仍处于 open 且未删除的实例。
+   * 已完成 / 已跳过 / 已删除的实例保持原样，只从明天起生效。
+   */
+  async applyRepeatToToday(id, patch, meta = {}, now = new Date()) {
+    const rule = await this.updateRepeat(id, patch, { ...meta, action: 'repeat-apply' })
+    const dayKey = localDateKey(now)
+    const inst = this.memos.find((m) => m.repeatId === id && m.repeatDate === dayKey)
+    if (!inst || inst.deletedAt || inst.status !== 'open') return { repeat: rule, memo: inst || null }
+
+    const fields = instanceFields(rule, dayKey, now)
+    const memo = await this.update(
+      inst.id,
+      {
+        title: fields.title,
+        type: fields.type,
+        priority: fields.priority,
+        tags: fields.tags,
+        note: fields.note,
+        dueAt: fields.dueAt,
+        reminderAt: fields.reminderAt
+      },
+      {
+        actor: meta.actor || 'web',
+        reason: meta.reason || '同步修改重复系列',
+        action: 'repeat-apply'
+      }
+    )
+    return { repeat: rule, memo }
   }
 
   listNotes() {

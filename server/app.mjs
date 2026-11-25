@@ -3,8 +3,10 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { TYPES, PRIORITIES, STATUSES, NOTE_COLORS, STATUS_LABELS } from './store.mjs'
 import { AttachmentStore } from './attachments.mjs'
+import { FREQS, WEEKDAYS, localDateKey, repeatLabel } from './repeat.mjs'
 
 const MAX_BODY = 12 * 1024 * 1024
+const MAX_REPEAT_IN_FOCUS = 2
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -60,22 +62,22 @@ const isSameDay = (a, b = Date.now()) => dayStart(a) === dayStart(b)
 
 function buildFocus(store) {
   const now = Date.now()
-  const active = store.list().filter((m) => !m.deletedAt && m.status === 'open')
+  const all = store.list()
+  const active = all.filter((m) => !m.deletedAt && m.status === 'open')
 
   const overdue = active.filter((m) => m.dueAt && new Date(m.dueAt).getTime() < now)
   const dueToday = active.filter((m) => m.dueAt && isSameDay(m.dueAt))
   const key = active.filter((m) => m.priority === 'P0' || m.priority === 'P1' || m.isDoing)
+  const rank = { P0: 0, P1: 1, P2: 2, P3: 3 }
 
   const seen = new Set()
-  const picked = []
+  const primary = []
   for (const memo of [...overdue, ...dueToday, ...key]) {
     if (seen.has(memo.id)) continue
     seen.add(memo.id)
-    picked.push(memo)
+    primary.push(memo)
   }
-
-  const rank = { P0: 0, P1: 1, P2: 2, P3: 3 }
-  picked.sort((a, b) => {
+  primary.sort((a, b) => {
     const aOver = a.dueAt && new Date(a.dueAt).getTime() < now ? 0 : 1
     const bOver = b.dueAt && new Date(b.dueAt).getTime() < now ? 0 : 1
     if (aOver !== bOver) return aOver - bOver
@@ -85,28 +87,39 @@ function buildFocus(store) {
     return av - bv
   })
 
-  if (picked.length < 3) {
-    const rest = active
-      .filter((m) => !seen.has(m.id))
-      .sort((a, b) => rank[a.priority] - rank[b.priority] || new Date(b.updatedAt) - new Date(a.updatedAt))
-    for (const memo of rest) {
-      picked.push(memo)
-      if (picked.length >= 3) break
+  // 「不足 3 条从剩余补齐」折叠进同一个候选池：不再有第二段独立补齐逻辑。
+  const rest = active
+    .filter((m) => !seen.has(m.id))
+    .sort((a, b) => rank[a.priority] - rank[b.priority] || new Date(b.updatedAt) - new Date(a.updatedAt))
+
+  const ruleById = new Map(store.listRepeats({ includeDeleted: true }).map((r) => [r.id, r]))
+  const picked = []
+  let repeatQuota = MAX_REPEAT_IN_FOCUS
+  for (const memo of [...primary, ...rest]) {
+    if (picked.length >= 6) break
+    // 硬上限：即使总条数不足 3，也不放宽重复项配额（软上限等于没做配额）。
+    if (memo.repeatId) {
+      if (repeatQuota <= 0) continue
+      repeatQuota -= 1
     }
+    picked.push({
+      ...memo,
+      repeatLabel: memo.repeatId ? repeatLabel(ruleById.get(memo.repeatId) || null) : null
+    })
   }
 
   return {
     date: new Date().toISOString(),
-    items: picked.slice(0, 6),
+    items: picked,
     notes: store.listNotes(),
     stats: {
       open: active.length,
       doing: active.filter((m) => m.isDoing).length,
       overdue: overdue.length,
       dueToday: dueToday.length,
-      done: store.list().filter((m) => m.status === 'done' && !m.deletedAt).length,
-      archived: store.list().filter((m) => m.status === 'archived' && !m.deletedAt).length,
-      doneToday: store.list().filter(
+      done: all.filter((m) => m.status === 'done' && !m.deletedAt).length,
+      archived: all.filter((m) => m.status === 'archived' && !m.deletedAt).length,
+      doneToday: all.filter(
         (m) => m.status === 'done' && m.completedAt && isSameDay(m.completedAt) && !m.deletedAt
       ).length
     },
@@ -142,12 +155,67 @@ export function createAppServer({ store, distDir, onReminderAck }) {
         priorities: PRIORITIES,
         statuses: STATUSES,
         statusLabels: STATUS_LABELS,
-        noteColors: NOTE_COLORS
+        noteColors: NOTE_COLORS,
+        repeats: store.listRepeats().length,
+        freqs: FREQS,
+        weekdays: WEEKDAYS.map((w) => w.value),
+        weekdayLabels: WEEKDAYS
       })
     }
 
     if (p === '/api/focus' && method === 'GET') {
+      // 幂等快路径：同一天几乎零成本；生成与响应内容强相关，必须发生在 buildFocus 之前。
+      await store.ensureToday()
       return sendJson(res, 200, buildFocus(store))
+    }
+
+    if (p === '/api/repeats') {
+      if (method === 'GET') {
+        const includeDeleted = url.searchParams.get('includeDeleted') === '1'
+        return sendJson(res, 200, { repeats: store.listRepeats({ includeDeleted }) })
+      }
+      if (method === 'POST') {
+        const body = await readBody(req)
+        const actor = actorOf(req)
+        const repeat = await store.createRepeat(body, { actor, reason: body.reason })
+        // 建完立刻生成本次实例；今天不命中（如周二建周三规则）时 memo 为 null。
+        await store.ensureToday()
+        const memo = store.list().find(
+          (m) => m.repeatId === repeat.id && m.repeatDate === localDateKey()
+        ) || null
+        return sendJson(res, 201, { repeat, memo })
+      }
+      return fail(res, 405, '不支持的方法')
+    }
+
+    const repeatApply = /^\/api\/repeats\/([A-Za-z0-9_-]{1,64})\/apply$/.exec(p)
+    if (repeatApply && method === 'POST') {
+      const body = await readBody(req)
+      const result = await store.applyRepeatToToday(repeatApply[1], body, {
+        actor: actorOf(req),
+        reason: body.reason
+      })
+      return sendJson(res, 200, result)
+    }
+
+    const repeatSingle = /^\/api\/repeats\/([A-Za-z0-9_-]{1,64})$/.exec(p)
+    if (repeatSingle) {
+      const id = repeatSingle[1]
+      if (method === 'PATCH') {
+        const body = await readBody(req)
+        return sendJson(res, 200, {
+          repeat: await store.updateRepeat(id, body, { actor: actorOf(req), reason: body.reason })
+        })
+      }
+      if (method === 'DELETE') {
+        const hard = url.searchParams.get('hard') === '1'
+        const body = await readBody(req).catch(() => ({}))
+        return sendJson(res, 200, await store.removeRepeat(id, hard, {
+          actor: actorOf(req),
+          reason: body.reason
+        }))
+      }
+      return fail(res, 405, '不支持的方法')
     }
 
     if (p === '/api/settings') {
@@ -157,7 +225,10 @@ export function createAppServer({ store, distDir, onReminderAck }) {
     }
 
     if (p === '/api/memos') {
-      if (method === 'GET') return sendJson(res, 200, { memos: store.list() })
+      if (method === 'GET') {
+        await store.ensureToday()
+        return sendJson(res, 200, { memos: store.list() })
+      }
       if (method === 'POST') {
         const body = await readBody(req)
         return sendJson(res, 201, await store.create(body, { actor: actorOf(req), reason: body.reason }))
@@ -187,11 +258,12 @@ export function createAppServer({ store, distDir, onReminderAck }) {
       const history = await store.history.recent(5000)
       const payload = JSON.stringify(
         {
-          version: 3,
+          version: 4,
           exportedAt: new Date().toISOString(),
           memos: store.list(),
           notes: store.listNotes(),
           settings: store.getSettings(),
+          repeats: store.listRepeats({ includeDeleted: true }),
           history
         },
         null,
@@ -213,6 +285,10 @@ export function createAppServer({ store, distDir, onReminderAck }) {
       const mode = body && body.mode === 'replace' ? 'replace' : 'merge'
       if (!Array.isArray(list)) return fail(res, 400, '导入数据缺少 memos 数组')
       const result = await store.importMemos(list, mode)
+      let repeatCount = 0
+      if (Array.isArray(body.repeats)) {
+        repeatCount = (await store.importRepeats(body.repeats, mode)).count
+      }
       if (Array.isArray(body.notes)) {
         for (const note of body.notes) {
           if (!note || !note.content) continue
@@ -221,7 +297,7 @@ export function createAppServer({ store, distDir, onReminderAck }) {
           else await store.createNote(note)
         }
       }
-      return sendJson(res, 200, result)
+      return sendJson(res, 200, { ...result, repeatCount })
     }
 
     const ackMatch = /^\/api\/memos\/([A-Za-z0-9-]{1,64})\/reminder-ack$/.exec(p)
@@ -268,6 +344,16 @@ export function createAppServer({ store, distDir, onReminderAck }) {
       )
       onReminderAck?.({ memo: next, action })
       return sendJson(res, 200, next)
+    }
+
+    const skipMatch = /^\/api\/memos\/([A-Za-z0-9-]{1,64})\/skip$/.exec(p)
+    if (skipMatch && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}))
+      const memo = await store.skip(skipMatch[1], {
+        actor: actorOf(req),
+        reason: body.reason || '跳过本次'
+      })
+      return sendJson(res, 200, memo)
     }
 
     const attSingle = /^\/api\/memos\/([A-Za-z0-9-]{1,64})\/attachments\/([A-Za-z0-9]{6,64})$/.exec(p)

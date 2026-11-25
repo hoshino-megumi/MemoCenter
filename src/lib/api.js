@@ -24,6 +24,8 @@ async function request(url, options = {}) {
 
 export const api = {
   health: () => request('/api/health'),
+  /** 只读 health 里的规则数，避免调用方重复拉取整份 health 载荷 */
+  repeatCount: () => request('/api/health').then((d) => d.repeats || 0),
   focus: () => request('/api/focus'),
   list: () => request('/api/memos').then((d) => d.memos || []),
   create: (payload) => request('/api/memos', { method: 'POST', body: JSON.stringify(payload) }),
@@ -46,6 +48,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action, minutes })
     }),
+
+  // 重复规则（独立资源，PATCH 规则不会改动今天已生成的实例）
+  listRepeats: (includeDeleted = false) =>
+    request(`/api/repeats${includeDeleted ? '?includeDeleted=1' : ''}`).then((d) => d.repeats || []),
+  createRepeat: (payload) => request('/api/repeats', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
+  updateRepeat: (id, patch) => request(`/api/repeats/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch)
+  }),
+  applyRepeat: (id, patch) => request(`/api/repeats/${id}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(patch)
+  }),
+  removeRepeat: (id, hard = false) => request(`/api/repeats/${id}${hard ? '?hard=1' : ''}`, {
+    method: 'DELETE'
+  }),
+  skipRepeat: (id, reason) => request(`/api/memos/${id}/skip`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  }),
 
   listNotes: () => request('/api/notes').then((d) => d.notes || []),
   createNote: (payload) => request('/api/notes', { method: 'POST', body: JSON.stringify(payload) }),

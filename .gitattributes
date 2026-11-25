@@ -15,6 +15,7 @@
 *.css  text eol=lf
 *.html text eol=lf
 *.md   text eol=lf
+*.mermaid text eol=lf
 
 # 图片等二进制，禁止 diff 与转换
 *.png  binary

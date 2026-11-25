@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
 import AttachmentPanel from './AttachmentPanel'
 import HistoryTimeline from './HistoryTimeline'
+import RepeatBadge from './RepeatBadge'
 import { PRIORITIES, STATUS_LABEL, TYPES, fromLocalInput, formatDate, toLocalInput } from '../lib/format'
 
 const STATUS_OPTIONS = [
@@ -38,8 +39,12 @@ export default function MemoDrawer({
   notify,
   desktopAlive = false,
   requireReason = false,
-  onRefresh
+  onRefresh,
+  rules = [],
+  onSkip,
+  onEditSeries
 }) {
+  const rule = memo.repeatId ? rules.find((r) => r.id === memo.repeatId) || null : null
   const [form, setForm] = useState(() => toForm(memo))
   const [tagInput, setTagInput] = useState('')
   const [saving, setSaving] = useState(false)
@@ -74,7 +79,7 @@ export default function MemoDrawer({
     setTagInput('')
     setPending(null)
     clearTimeout(timer.current)
-  }, [memo.id])
+  }, [memo.id, memo.status, memo.skippedAt])
 
   useEffect(() => {
     const el = titleRef.current
@@ -219,6 +224,15 @@ export default function MemoDrawer({
       d.setHours(9, 0, 0, 0)
     }
     update('due', toLocalInput(d.toISOString()), true)
+  }
+
+  async function handleSkip() {
+    const ok = await onSkip?.(memo, true)
+    if (ok !== false) onClose()
+  }
+
+  async function handleUnskip() {
+    await onSkip?.(memo, false)
   }
 
   if (memo.deletedAt) {
@@ -471,6 +485,32 @@ export default function MemoDrawer({
           {!desktopAlive && <p className="field-hint">桌面端未运行，提醒不会弹出；运行 npm run desktop 后生效</p>}
           {form.status === 'archived' && <p className="field-hint">事项已归档，提醒不会触发</p>}
         </div>
+
+        {memo.repeatId && (
+          <div className="field repeat-summary">
+            <label className="field-label">重复事项</label>
+            <div className="repeat-summary-row">
+              <RepeatBadge rule={rule} />
+              <span className="repeat-date">本次日期 {memo.repeatDate || '—'}</span>
+            </div>
+            <p className="repeat-hint">本页所有修改仅影响今天这一条</p>
+            {memo.skippedAt && <p className="repeat-skipped">今天已跳过</p>}
+            <div className="repeat-summary-actions">
+              <button type="button" className="mini-btn" onClick={() => onEditSeries?.(memo, rule)}>
+                改整个系列…
+              </button>
+              {memo.skippedAt ? (
+                <button type="button" className="mini-btn" onClick={handleUnskip}>
+                  取消跳过
+                </button>
+              ) : (
+                <button type="button" className="mini-btn" onClick={handleSkip}>
+                  跳过本次
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="field">
           <label className="field-label">标签</label>

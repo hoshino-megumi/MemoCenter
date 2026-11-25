@@ -1,7 +1,21 @@
 import Icon from './Icon'
+import RepeatBadge from './RepeatBadge'
 import { DOING_LABEL, formatDue, formatDate, isOverdue, STATUS_LABEL } from '../lib/format'
+import { repeatLabel } from '../lib/repeat'
 
-function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, onPurge, onArchive }) {
+function MemoRow({
+  memo,
+  view,
+  active,
+  rule = null,
+  onSelect,
+  onToggle,
+  onDelete,
+  onRestore,
+  onPurge,
+  onArchive,
+  onSkip
+}) {
   const overdue = isOverdue(memo)
   const isTrash = view === 'trash'
   const done = memo.status === 'done'
@@ -12,7 +26,7 @@ function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, 
     <div
       className={`memo ${done ? 'is-done' : ''} ${archived ? 'is-archived' : ''} ${active ? 'is-active' : ''} ${
         isTrash ? 'is-trash' : ''
-      }`}
+      } ${memo.skippedAt ? 'is-skipped' : ''}`}
       onClick={() => onSelect(memo)}
       role="button"
       tabIndex={0}
@@ -26,26 +40,29 @@ function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, 
       {!isTrash && !archived && (
         <button
           type="button"
-          className={`check ${done ? 'is-checked' : ''}`}
-          aria-label={done ? '标记为未完成' : '标记为已完成'}
+          className={`check ${done ? 'is-checked' : ''} ${!done && memo.isDoing ? 'is-doing' : ''}`}
+          aria-label={done ? '标记为未完成' : memo.isDoing ? '进行中，点击标记为已完成' : '标记为已完成'}
           onClick={(e) => {
             e.stopPropagation()
             onToggle(memo)
           }}
         >
-          {done && <Icon name="check" size={12} />}
+          {done ? <Icon name="check" size={12} /> : memo.isDoing ? <span className="check-dot" /> : null}
         </button>
       )}
 
       <div className="memo-main">
         <div className="memo-title">
           {memo.pinned && <Icon name="pin" size={13} className="pin-icon" />}
+          {memo.repeatId && <RepeatBadge rule={rule} compact />}
           <span>{memo.title}</span>
         </div>
         <div className="memo-meta">
           <span className={`prio p-${(memo.priority || 'P2').toLowerCase()}`}>{memo.priority}</span>
           <span className="meta-type">{memo.type}</span>
-          {memo.isDoing && <span className="meta-state">{DOING_LABEL}</span>}
+          {memo.repeatId && <span className="meta-repeat">{repeatLabel(rule)}</span>}
+          {memo.skippedAt && <span className="meta-skipped">已跳过</span>}
+          {memo.isDoing && <span className="meta-state is-doing">{DOING_LABEL}</span>}
           {archived && (
             <span className="meta-state is-archived" title={memo.archivedAt ? `归档于 ${formatDate(memo.archivedAt)}` : '已归档'}>
               {STATUS_LABEL.archived}
@@ -110,6 +127,19 @@ function MemoRow({ memo, view, active, onSelect, onToggle, onDelete, onRestore, 
           </>
         ) : (
           <>
+            {memo.repeatId && (
+              <button
+                type="button"
+                className="mini-btn"
+                title={memo.skippedAt ? '取消跳过，回到未完成' : '只跳过今天，明天照常出现'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSkip?.(memo, !memo.skippedAt)
+                }}
+              >
+                {memo.skippedAt ? '取消跳过' : '跳过'}
+              </button>
+            )}
             {archived ? (
               <button
                 type="button"
@@ -168,8 +198,12 @@ export default function MemoList({
   onRestore,
   onPurge,
   onArchive,
-  onEmptyTrash
+  onEmptyTrash,
+  rules = [],
+  onSkip
 }) {
+  const ruleById = new Map(rules.map((rule) => [rule.id, rule]))
+
   if (!ready) {
     return (
       <div className="list-area">
@@ -218,12 +252,14 @@ export default function MemoList({
                 memo={memo}
                 view={view}
                 active={selectedId === memo.id}
+                rule={memo.repeatId ? ruleById.get(memo.repeatId) || null : null}
                 onSelect={onSelect}
                 onToggle={onToggle}
                 onDelete={onDelete}
                 onRestore={onRestore}
                 onPurge={onPurge}
                 onArchive={onArchive}
+                onSkip={onSkip}
               />
             ))}
           </div>

@@ -209,6 +209,7 @@ function Focus() {
                     <div className="fx-meta">
                       <span className={`prio p-${(memo.priority || 'P2').toLowerCase()}`}>{memo.priority}</span>
                       <span>{memo.type}</span>
+                      {memo.repeatLabel && <span className="fx-repeat">{memo.repeatLabel}</span>}
                       {memo.dueAt && (
                         <span className={overdue ? 'fx-overdue' : ''}>
                           {overdue ? '逾期 · ' : ''}

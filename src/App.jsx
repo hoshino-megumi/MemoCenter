@@ -7,7 +7,9 @@ import MemoList from './components/MemoList'
 import MemoDrawer from './components/MemoDrawer'
 import NotesView from './components/NotesView'
 import ConfirmDialog from './components/ConfirmDialog'
+import RepeatDialog from './components/RepeatDialog'
 import Icon from './components/Icon'
+import { localDateKey } from './lib/repeat'
 import { api } from './lib/api'
 import { useMemos } from './hooks/useMemos'
 import {
@@ -57,6 +59,9 @@ export default function App() {
   const [desktopAlive, setDesktopAlive] = useState(false)
   const [noteCount, setNoteCount] = useState(0)
   const [requireReason, setRequireReason] = useState(false)
+  const [rules, setRules] = useState([])
+  const [ruleDialog, setRuleDialog] = useState(null)
+  const [healthInfo, setHealthInfo] = useState(null)
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('memo-theme')
     if (saved === 'light' || saved === 'dark') return saved
@@ -68,6 +73,9 @@ export default function App() {
   const fileRef = useRef(null)
   const toastTimer = useRef(null)
   const deepLinkDone = useRef(false)
+  const dayRef = useRef(localDateKey(new Date()))
+  const drawerOpenRef = useRef(false)
+  const pendingDayReload = useRef(false)
 
   const notify = useCallback((msg, tone = 'info') => {
     setToast({ msg, tone })
@@ -96,6 +104,7 @@ export default function App() {
     ready,
     create,
     update,
+    archive,
     remove,
     restore,
     purge,
@@ -104,9 +113,15 @@ export default function App() {
     reload
   } = useMemos((message) => notify(message, 'danger'))
 
+  // 提前声明：下方的跨天 effect 依赖数组会用到它（否则触发 TDZ）
+  const selectedMemo = selectedId ? memos.find((m) => m.id === selectedId) || null : null
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('memo-theme', theme)
+    // 桌面端：把主题同步给 Electron 外壳，让原生菜单栏一起变暗。
+    // 网页模式下 window.memoDesktop 不存在，静默跳过即可。
+    window.memoDesktop?.setTheme?.(theme).catch?.(() => {})
   }, [theme])
 
   useEffect(() => {
@@ -119,6 +134,7 @@ export default function App() {
           setDesktopAlive(Boolean(h.desktop))
           setNoteCount(h.notes || 0)
           setRequireReason(Boolean(h.requireReason))
+          setHealthInfo(h)
         })
         .catch(() => {})
     }
@@ -157,6 +173,48 @@ export default function App() {
     if (params.get('quick') === '1') setTimeout(() => quickRef.current?.focus(), 200)
   }, [ready, memos])
 
+  useEffect(() => {
+    if (!ready) return
+    api
+      .listRepeats()
+      .then(setRules)
+      .catch(() => {})
+  }, [ready])
+
+  // 跨天检测：失败不打断用户；抽屉打开时只记一笔，等关闭后再补刷一次。
+  useEffect(() => {
+    drawerOpenRef.current = Boolean(selectedMemo)
+    if (!selectedMemo && pendingDayReload.current) {
+      pendingDayReload.current = false
+      dayRef.current = localDateKey(new Date())
+      reload()
+      api
+        .listRepeats()
+        .then(setRules)
+        .catch(() => {})
+      notify('已切换到新的一天，固定事项已更新')
+    }
+  }, [selectedMemo, reload, notify])
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const key = localDateKey(new Date())
+      if (key === dayRef.current) return
+      if (drawerOpenRef.current) {
+        pendingDayReload.current = true
+        return
+      }
+      dayRef.current = key
+      reload()
+      api
+        .listRepeats()
+        .then(setRules)
+        .catch(() => {})
+      notify('已切换到新的一天，固定事项已更新')
+    }, 60000)
+    return () => clearInterval(timer)
+  }, [reload, notify])
+
   const filtered = useMemo(    () => sortMemos(filterMemos(memos, { view, tag, q, types, priorities, showDone }), sort),
     [memos, view, tag, q, types, priorities, showDone, sort]
   )
@@ -177,7 +235,6 @@ export default function App() {
     [memos]
   )
 
-  const selectedMemo = selectedId ? memos.find((m) => m.id === selectedId) || null : null
   const currentView =
     view === 'notes' ? { key: 'notes', label: '便签' } : VIEWS.find((v) => v.key === view) || VIEWS[0]
   const activeFilters =
@@ -231,7 +288,7 @@ export default function App() {
     async (memo, archived = true) => {
       try {
         if (!archived) {
-          await update(memo.id, { status: 'open' })
+          await archive(memo.id, false)
           notify('已取消归档')
           return
         }
@@ -244,13 +301,13 @@ export default function App() {
           })
           if (!ok) return
         }
-        await api.archive(memo.id, true)
+        await archive(memo.id, true)
         notify('已归档')
       } catch (err) {
         notify(err.message, 'danger')
       }
     },
-    [update, askConfirm, notify]
+    [archive, askConfirm, notify]
   )
 
   const handleDelete = useCallback(
@@ -340,6 +397,57 @@ export default function App() {
       await update(id, patch)
     },
     [update]
+  )
+
+  const openRepeatDialog = useCallback((mode, rule) => {
+    setRuleDialog({ mode, rule: rule || null })
+  }, [])
+
+  const handleRepeatSave = useCallback(
+    async (payload) => {
+      const dialog = ruleDialog
+      if (!dialog) return
+      if (dialog.mode !== 'create' && !dialog.rule) {
+        notify('规则尚未加载，请稍后再试', 'danger')
+        return
+      }
+      if (dialog.mode === 'create') await api.createRepeat(payload)
+      else if (dialog.mode === 'edit') await api.updateRepeat(dialog.rule.id, payload)
+      else await api.applyRepeat(dialog.rule.id, payload)
+
+      setRuleDialog(null)
+      // 改系列会改写今天这条的标题等字段，抽屉里的旧表单必须重开才能反映新值。
+      if (dialog.mode === 'apply') setSelectedId(null)
+      await reload()
+      api
+        .listRepeats()
+        .then(setRules)
+        .catch(() => {})
+      notify(
+        dialog.mode === 'create'
+          ? '重复规则已创建，今天这条已出现'
+          : dialog.mode === 'apply'
+            ? '已改整个系列，今天这条已同步'
+            : '规则已更新'
+      )
+    },
+    [ruleDialog, reload, notify]
+  )
+
+  const handleSkip = useCallback(
+    async (memo, skip = true) => {
+      try {
+        if (skip) await api.skipRepeat(memo.id)
+        else await api.archive(memo.id, false)
+        await reload()
+        notify(skip ? '已跳过今天，明天照常出现' : '已取消跳过')
+        return true
+      } catch (err) {
+        notify(err.message || '操作失败', 'danger')
+        return false
+      }
+    },
+    [reload, notify]
   )
 
   const handleExport = useCallback(() => {
@@ -463,7 +571,20 @@ export default function App() {
           <>
             <StatsBar stats={stats} />
 
-            {view !== 'trash' && <QuickAdd ref={quickRef} onCreate={handleCreate} />}
+            {view !== 'trash' && (
+              <div className="quick-wrap">
+                <QuickAdd ref={quickRef} onCreate={handleCreate} />
+                <button
+                  type="button"
+                  className="repeat-add-btn"
+                  title="新建每日 / 每周固定事项"
+                  onClick={() => openRepeatDialog('create', null)}
+                >
+                  <Icon name="repeat" size={14} />
+                  <span>+ 重复</span>
+                </button>
+              </div>
+            )}
 
             <FilterBar
               types={types}
@@ -491,6 +612,8 @@ export default function App() {
               onPurge={handlePurge}
               onArchive={handleArchive}
               onEmptyTrash={handleEmptyTrash}
+              rules={rules}
+              onSkip={handleSkip}
             />
           </>
         )}
@@ -511,8 +634,21 @@ export default function App() {
           askConfirm={askConfirm}
           requireReason={requireReason}
           onRefresh={reload}
+          rules={rules}
+          onSkip={handleSkip}
+          onEditSeries={(_memo, rule) => openRepeatDialog('apply', rule)}
         />
       )}
+
+      <RepeatDialog
+        open={Boolean(ruleDialog)}
+        mode={ruleDialog?.mode || 'create'}
+        rule={ruleDialog?.rule || null}
+        weekdays={healthInfo?.weekdayLabels}
+        onCancel={() => setRuleDialog(null)}
+        onSave={handleRepeatSave}
+        notify={notify}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmState)}
