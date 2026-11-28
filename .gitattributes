@@ -3,6 +3,10 @@
 *.bat -text
 *.cmd -text
 
+# .vbs 是 UTF-16 LE (带 BOM) 的 WSH 脚本，同样禁止转换，
+# 一旦被当作文本处理，编码与换行都会损坏，双击后静默失败
+*.vbs -text
+
 # shell 脚本统一 LF
 *.sh text eol=lf
 

@@ -26,6 +26,16 @@ const BASE = `http://127.0.0.1:${PORT}`
 const DATA_DIR = path.join(ROOT, 'data')
 const PRELOAD = path.join(__dirname, 'preload.cjs')
 const TRAY_ICON = path.join(__dirname, 'assets', 'tray.png')
+/** 窗口与任务栏图标：多尺寸 ICO（16/32/48/64），由 assets/make-ico.mjs 生成 */
+const APP_ICON = path.join(__dirname, 'assets', 'app.ico')
+/**
+ * Windows 应用用户模型 ID。
+ * 未打包的 Electron 任务栏按钮默认沿用 electron.exe 的资源图标，
+ * 只有设置了 AppUserModelID，shell 才会按窗口 icon 绘制任务栏图标。
+ * 该值必须与 make-shortcut.mjs 写入快捷方式的 appUserModelId 完全一致，
+ * 否则 Windows 通知（Toast）找不到对应的开始菜单快捷方式而无法弹出。
+ */
+const APP_ID = 'com.memo.center.desktop'
 
 const TOAST_W = 420
 const TOAST_H = 198
@@ -300,6 +310,7 @@ function createMainWindow(query = '') {
     minHeight: 620,
     backgroundColor: nativeTheme.themeSource === 'dark' ? '#15161a' : '#f6f6f3',
     title: '备忘中心',
+    icon: existsSync(APP_ICON) ? APP_ICON : undefined,
     show: false,
     webPreferences: {
       preload: PRELOAD,
@@ -583,6 +594,9 @@ function noticeSharedMode() {
 }
 
 async function bootstrap() {
+  // 必须在创建任何窗口与发送通知之前设置，否则任务栏图标仍取 electron.exe 的资源图标
+  app.setAppUserModelId(APP_ID)
+
   // 移除窗口顶部的原生菜单栏（File / Edit / View / Window）。
   // 只影响应用主菜单，托盘右键菜单（buildTrayMenu）不受影响。
   // 网页内文本选择、复制粘贴等仍由 Chromium 自带处理，不依赖这条菜单。

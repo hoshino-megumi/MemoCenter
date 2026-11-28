@@ -1,12 +1,23 @@
 import { spawn } from 'node:child_process'
 import { existsSync, openSync, closeSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import electronPath from 'electron'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 const LOG_LIMIT = 2 * 1024 * 1024
+
+const require = createRequire(import.meta.url)
+/**
+ * 解析 Electron 可执行文件路径。
+ *
+ * 这里刻意不用 `import electronPath from 'electron'`：在 ELECTRON_RUN_AS_NODE
+ * 模式下运行本文件时（静默启动器找不到系统 Node，改用项目自带的 Electron 兜底），
+ * 该包的 ESM 默认导出是空对象，只有 CJS require 才能拿到真实路径。
+ * 两种运行方式下 require 的返回值都一致，故统一走 createRequire。
+ */
+const electronPath = require('electron')
 
 const foreground = process.argv.includes('--foreground')
 const extraArgs = process.argv.slice(2).filter((arg) => arg !== '--foreground')
